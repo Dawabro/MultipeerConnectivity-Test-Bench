@@ -9,9 +9,11 @@ import SwiftUI
 
 @main
 struct MultipeerBenchApp: App {
+    let peerCommunicator = PeerCommunicatorBasic()
+    
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(peerCommunicator: peerCommunicator)
         }
     }
 }
