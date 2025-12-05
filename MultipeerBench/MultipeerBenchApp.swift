@@ -13,7 +13,7 @@ struct MultipeerBenchApp: App {
     
     var body: some Scene {
         WindowGroup {
-            ContentView(peerCommunicator: peerCommunicator)
+            BasicPeerCommunicationView(peerCommunicator: peerCommunicator)
         }
     }
 }

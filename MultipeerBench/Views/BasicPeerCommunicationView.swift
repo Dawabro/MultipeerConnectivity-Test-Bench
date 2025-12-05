@@ -1,13 +1,13 @@
 //
-//  ContentView.swift
+//  BasicPeerCommunicationView.swift
 //  MultipeerBench
 //
-//  Created by David Brown on 4/12/25.
+//  Created by David Brown on 12/5/25.
 //
 
 import SwiftUI
 
-struct ContentView: View {
+struct BasicPeerCommunicationView: View {
     var peerCommunicator: PeerCommunication
     private let browsingState: Binding<Bool>
     private let advertisingState: Binding<Bool>
@@ -188,16 +188,5 @@ fileprivate struct LogEntryRow: View {
 }
 
 #Preview {
-    ContentView(peerCommunicator: MockPeerCommunicator())
-}
-
-extension ColorScheme {
-    
-    var isLight: Bool {
-        self == .light
-    }
-    
-    var isDark: Bool {
-        !isLight
-    }
+    BasicPeerCommunicationView(peerCommunicator: MockPeerCommunicator())
 }

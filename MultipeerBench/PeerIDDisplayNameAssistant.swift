@@ -17,8 +17,8 @@ struct PeerIDDisplayNameAssistant {
     static func validDisplayName(from input: String) -> String {
         guard !displayNameIsValid(input) else { return input }
         var trimmedInput = String(input.prefix(maxNameByteSize))
-        
         var trimCountLimit = 100
+        
         while !displayNameIsValid(trimmedInput) {
             trimmedInput.removeLast()
             trimCountLimit -= 1

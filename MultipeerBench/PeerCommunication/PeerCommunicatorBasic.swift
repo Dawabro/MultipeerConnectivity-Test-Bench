@@ -47,33 +47,6 @@ protocol PeerCommunication: Observable {
 }
 
 @Observable
-final class ConnectedPeer: Identifiable {
-    let id: UUID
-    var isSelected: Bool = true
-    let mcPeerID: MCPeerID
-    
-    var displayName: String {
-        mcPeerID.displayName
-    }
-    
-    init(peerID: MCPeerID) {
-        self.id = UUID()
-        self.mcPeerID = peerID
-    }
-}
-
-struct LogEntry: Identifiable {
-    let message: String
-    let timeStamp: Date
-    let id: UUID = UUID()
-    
-    init(_ message: String, timeStamp: Date = Date()) {
-        self.message = message
-        self.timeStamp = timeStamp
-    }
-}
-
-@Observable
 final class PeerCommunicatorBasic: NSObject, MCNearbyServiceAdvertiserDelegate, PeerCommunication {
     var connectedPeers: [ConnectedPeer] = []
     var logs: [LogEntry] = []
@@ -84,7 +57,6 @@ final class PeerCommunicatorBasic: NSObject, MCNearbyServiceAdvertiserDelegate, 
     private let serviceBrowser: MCNearbyServiceBrowser
     private var serviceAdvertiser: MCNearbyServiceAdvertiser
     private let serviceType = "dwb-mpbench"
-    
     private var peerFoundTimestamp = [MCPeerID: Date]()
     
     override init() {
@@ -95,6 +67,10 @@ final class PeerCommunicatorBasic: NSObject, MCNearbyServiceAdvertiserDelegate, 
         self.session.delegate = self
         self.serviceBrowser.delegate = self
         self.serviceAdvertiser.delegate = self
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
     
     func startBrowsing() {
@@ -166,6 +142,7 @@ final class PeerCommunicatorBasic: NSObject, MCNearbyServiceAdvertiserDelegate, 
     func disconnectSession() {
         session.disconnect()
         connectedPeers.removeAll()
+        peerFoundTimestamp.removeAll()
         log(message: "🔴 Session disconnected")
     }
     
@@ -215,7 +192,7 @@ extension PeerCommunicatorBasic: MCNearbyServiceBrowserDelegate {
     
     func browser(_ browser: MCNearbyServiceBrowser, didNotStartBrowsingForPeers error: Error) {
         isBrowsing = false
-        log(message: "⛔️ Did not start browsing for peers")
+        log(message: "⛔️ Did not start browsing for peers, error: \(error.localizedDescription)")
     }
 }
 
@@ -231,8 +208,14 @@ extension PeerCommunicatorBasic: MCSessionDelegate {
             log(message: "📳 Connected to \(peerID.displayName) in \(connectionTimeInterval) seconds")
             addConnectedPeer(peerID)
         case MCSessionState.notConnected:
-            log(message: "📵 Not connected to \(peerID.displayName)")
-            removeConnectedPeer(peerID)
+            let isAConnectedPeer = connectedPeers.contains(where: { $0.mcPeerID == peerID })
+            
+            if isAConnectedPeer {
+                log(message: "📵 Not connected to \(peerID.displayName)")
+                removeConnectedPeer(peerID)
+            } else {
+                log(message: "📵 Not connected to \(peerID.displayName) (Ignored, not a connected peer)")
+            }
         default:
             print("\(peerID.displayName) has unknown MCSessionState \(state)")
         }
@@ -317,5 +300,16 @@ final class MockPeerCommunicator: PeerCommunication {
     
     func disconnectSession() {
         print("session disconnected")
+    }
+}
+
+struct LogEntry: Identifiable {
+    let message: String
+    let timeStamp: Date
+    let id: UUID = UUID()
+    
+    init(_ message: String, timeStamp: Date = Date()) {
+        self.message = message
+        self.timeStamp = timeStamp
     }
 }
