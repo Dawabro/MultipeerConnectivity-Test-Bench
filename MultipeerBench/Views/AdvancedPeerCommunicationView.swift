@@ -9,46 +9,30 @@ import SwiftUI
 
 struct AdvancedPeerCommunicationView: View {
     var peerCommunicator: PeerCommunicationAdvanced
-    private let browsingState: Binding<Bool>
-    private let advertisingState: Binding<Bool>
-    private let disconnectInBackgroundState: Binding<Bool>
+    var commState: PeerCommunicatorAdvancedState
     @State private var showClearLogsAlert = false
     @State private var showSessionDisconnectAlert = false
+    @State private var highlightedLogIDs: Set<UUID> = []
     
     private var dataSendingDisabled: Bool {
-        peerCommunicator.connectedPeers.isEmpty ||  peerCommunicator.connectedPeers.allSatisfy { $0.isSelected == false }
+        commState.connectedPeers.isEmpty ||  commState.connectedPeers.allSatisfy { $0.isSelected == false }
     }
     
-    init(peerCommunicator: PeerCommunicationAdvanced) {
+    init(peerCommunicator: PeerCommunicationAdvanced, commState: PeerCommunicatorAdvancedState) {
         self.peerCommunicator = peerCommunicator
-        
-        self.browsingState = Binding<Bool>(
+        self.commState = commState
+    }
+    
+    private var commsEnabled: Binding<Bool> {
+        Binding<Bool>(
             get: {
-                return peerCommunicator.isBrowsing
-            }, set: { startBrowsing in
-                if startBrowsing {
-                    peerCommunicator.startBrowsing()
+                return commState.isBrowsing && commState.isAdvertising
+            }, set: { startComms in
+                if startComms {
+                    peerCommunicator.start()
                 } else {
-                    peerCommunicator.stopBrowsing()
+                    peerCommunicator.stop()
                 }
-            })
-        
-        self.advertisingState = Binding<Bool>(
-            get: {
-                return peerCommunicator.isAdvertising
-            }, set: { startBrowsing in
-                if startBrowsing {
-                    peerCommunicator.startAdvertising()
-                } else {
-                    peerCommunicator.stopAdvertising()
-                }
-            })
-        
-        self.disconnectInBackgroundState = Binding<Bool>(
-            get: {
-                return peerCommunicator.disconnectInBackground
-            }, set: { shouldDisconnectInBackground in
-                peerCommunicator.setDisconnectInBackground(shouldDisconnectInBackground)
             })
     }
     
@@ -58,9 +42,7 @@ struct AdvancedPeerCommunicationView: View {
                 HStack {
                     Spacer()
                     VStack(spacing: 20) {
-                        Toggle("Browsing", isOn: browsingState)
-                        Toggle("Advertising", isOn: advertisingState)
-                        Toggle("Disconnect in Background", isOn: disconnectInBackgroundState)
+                        Toggle("Comms Enabled", isOn: commsEnabled)
                     }
                     .frame(maxWidth: 200)
                     .padding()
@@ -88,15 +70,9 @@ struct AdvancedPeerCommunicationView: View {
                     }
                 }
                 
-                List(peerCommunicator.connectedPeers) { peer in
+                List(commState.connectedPeers) { peer in
                     VStack(alignment: .leading, spacing: 4) {
                         ConnectedPeerRow(peer: peer)
-                            .swipeActions {
-                                Button("Disconnect") {
-                                    peerCommunicator.disconnectPeer(peer)
-                                }
-                                .tint(.red)
-                            }
                     }
                 }
                 .listStyle(.plain)
@@ -117,8 +93,8 @@ struct AdvancedPeerCommunicationView: View {
                 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
-                        ForEach(peerCommunicator.logs.sorted(by: { $0.timeStamp > $1.timeStamp })) { log in
-                            LogEntryRow(logEntry: log)
+                        ForEach(commState.logs.sorted(by: { $0.timeStamp > $1.timeStamp })) { log in
+                            LogEntryRow(logEntry: log, isHighlighted: highlightedLogIDs.contains(log.id))
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -130,6 +106,11 @@ struct AdvancedPeerCommunicationView: View {
                     .foregroundStyle(Color.gray.opacity(0.15))
             }
             .padding(.horizontal)
+            .onChange(of: commState.logs.count) { oldCount, newCount in
+                if newCount > oldCount {
+                    highlightNewLogs()
+                }
+            }
             
             Spacer()
             
@@ -140,7 +121,7 @@ struct AdvancedPeerCommunicationView: View {
         .fontDesign(.monospaced)
         .alert("Clear Logs?", isPresented: $showClearLogsAlert) {
             Button(role: .destructive) {
-                peerCommunicator.clearLogs()
+                commState.clearLogs()
             } label: {
                 Text("Clear")
             }
@@ -151,6 +132,18 @@ struct AdvancedPeerCommunicationView: View {
             } label: {
                 Text("Disconnect")
             }
+        }
+    }
+    
+    private func highlightNewLogs() {
+        let sortedLogs = commState.logs.sorted(by: { $0.timeStamp > $1.timeStamp })
+        guard let newestLog = sortedLogs.first else { return }
+        
+        highlightedLogIDs.insert(newestLog.id)
+        
+        Task {
+            try? await Task.sleep(for: .seconds(1))
+            highlightedLogIDs.remove(newestLog.id)
         }
     }
     
@@ -169,8 +162,13 @@ fileprivate struct ConnectedPeerRow: View {
             peer.isSelected.toggle()
         } label: {
             HStack {
-                Text(peer.displayName)
-                    .foregroundStyle(colorScheme.isLight ? .black : .white)
+                VStack(alignment: .leading) {
+                    Text(peer.displayName)
+                    
+                    Text("\(peer.mcPeerID.hash)")
+                        .font(.footnote)
+                }
+                .foregroundStyle(colorScheme.isLight ? .black : .white)
                 
                 Spacer()
                 Image(systemName: peer.isSelected ? "antenna.radiowaves.left.and.right.circle" : "antenna.radiowaves.left.and.right.slash.circle")
@@ -183,6 +181,7 @@ fileprivate struct ConnectedPeerRow: View {
 
 fileprivate struct LogEntryRow: View {
     var logEntry: LogEntry
+    var isHighlighted: Bool
     
     var body: some View {
         VStack(alignment: .leading) {
@@ -193,9 +192,16 @@ fileprivate struct LogEntryRow: View {
                 .font(.caption2)
                 .padding(.leading, 25)
         }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(isHighlighted ? Color.yellow.opacity(0.3) : Color.clear)
+        )
+        .animation(.easeOut(duration: 0.7), value: isHighlighted)
     }
 }
 
 #Preview {
-    AdvancedPeerCommunicationView(peerCommunicator: MockPeerCommunicatorAdvanced())
+    AdvancedPeerCommunicationView(peerCommunicator: MockPeerCommunicatorAdvanced(), commState: PeerCommunicatorAdvancedState())
 }

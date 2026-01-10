@@ -6,9 +6,12 @@
 //
 
 import UIKit
+import MultipeerConnectivity
 
+@MainActor
 struct PeerIDDisplayNameAssistant {
     private static let maxNameByteSize = 63
+    private static let peerIDKey = "persistedPeerIDKey"
     
     static var deviceName: String {
         validDisplayName(from: UIDevice.current.name)
@@ -26,6 +29,21 @@ struct PeerIDDisplayNameAssistant {
         }
         
         return trimmedInput
+    }
+        
+    static func persistentPeerID(displayName: String) -> MCPeerID {
+        if let data = UserDefaults.standard.data(forKey: peerIDKey),
+           let peerID = try? NSKeyedUnarchiver.unarchivedObject(ofClass: MCPeerID.self, from: data) {
+            return peerID
+        }
+        
+        let peerID = MCPeerID(displayName: validDisplayName(from: displayName))
+        
+        if let data = try? NSKeyedArchiver.archivedData(withRootObject: peerID, requiringSecureCoding: true) {
+            UserDefaults.standard.set(data, forKey: peerIDKey)
+        }
+        
+        return peerID
     }
     
     private static func displayNameIsValid(_ proposedDisplayName: String) -> Bool {

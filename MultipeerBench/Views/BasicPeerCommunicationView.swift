@@ -9,37 +9,49 @@ import SwiftUI
 
 struct BasicPeerCommunicationView: View {
     var peerCommunicator: PeerCommunication
-    private let browsingState: Binding<Bool>
-    private let advertisingState: Binding<Bool>
+    var commState: PeerCommunicatorState
     @State private var showClearLogsAlert = false
     @State private var showSessionDisconnectAlert = false
     
     private var dataSendingDisabled: Bool {
-        peerCommunicator.connectedPeers.isEmpty ||  peerCommunicator.connectedPeers.allSatisfy { $0.isSelected == false }
+        commState.connectedPeers.isEmpty ||  commState.connectedPeers.allSatisfy { $0.isSelected == false }
     }
     
-    init(peerCommunicator: PeerCommunication) {
+    init(peerCommunicator: PeerCommunication, commState: PeerCommunicatorState) {
         self.peerCommunicator = peerCommunicator
-        
-        self.browsingState = Binding<Bool>(
+        self.commState = commState
+    }
+    
+    private var browsingState: Binding<Bool> {
+        Binding<Bool>(
             get: {
-                return peerCommunicator.isBrowsing
+                return commState.isBrowsing
             }, set: { startBrowsing in
                 if startBrowsing {
-                    peerCommunicator.startBrowsing()
+                    Task {
+                        peerCommunicator.startBrowsing()
+                    }
                 } else {
-                    peerCommunicator.stopBrowsing()
+                    Task {
+                        peerCommunicator.stopBrowsing()
+                    }
                 }
             })
-        
-        self.advertisingState = Binding<Bool>(
+    }
+    
+    private var advertisingState: Binding<Bool> {
+        Binding<Bool>(
             get: {
-                return peerCommunicator.isAdvertising
+                return commState.isAdvertising
             }, set: { startBrowsing in
                 if startBrowsing {
-                    peerCommunicator.startAdvertising()
+                    Task {
+                        peerCommunicator.startAdvertising()
+                    }
                 } else {
-                    peerCommunicator.stopAdvertising()
+                    Task {
+                        peerCommunicator.stopAdvertising()
+                    }
                 }
             })
     }
@@ -79,12 +91,14 @@ struct BasicPeerCommunicationView: View {
                     }
                 }
                 
-                List(peerCommunicator.connectedPeers) { peer in
+                List(commState.connectedPeers) { peer in
                     VStack(alignment: .leading, spacing: 4) {
                         ConnectedPeerRow(peer: peer)
                             .swipeActions {
                                 Button("Disconnect") {
-                                    peerCommunicator.disconnectPeer(peer)
+                                    Task {
+                                        peerCommunicator.disconnectPeer(peer)
+                                    }
                                 }
                                 .tint(.red)
                             }
@@ -108,7 +122,7 @@ struct BasicPeerCommunicationView: View {
                 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
-                        ForEach(peerCommunicator.logs.sorted(by: { $0.timeStamp > $1.timeStamp })) { log in
+                        ForEach(commState.logs.sorted(by: { $0.timeStamp > $1.timeStamp })) { log in
                             LogEntryRow(logEntry: log)
                         }
                     }
@@ -131,14 +145,16 @@ struct BasicPeerCommunicationView: View {
         .fontDesign(.monospaced)
         .alert("Clear Logs?", isPresented: $showClearLogsAlert) {
             Button(role: .destructive) {
-                peerCommunicator.clearLogs()
+                commState.clearLogs()
             } label: {
                 Text("Clear")
             }
         }
         .alert("Disconnect Current Session?", isPresented: $showSessionDisconnectAlert) {
             Button(role: .destructive) {
-                peerCommunicator.disconnectSession()
+                Task {
+                    peerCommunicator.disconnectSession()
+                }
             } label: {
                 Text("Disconnect")
             }
@@ -146,8 +162,10 @@ struct BasicPeerCommunicationView: View {
     }
     
     private func sendData() {
-        let testData = Data([1, 2, 3, 4, 5])
-        peerCommunicator.sendData(testData)
+        Task {
+            let testData = Data([1, 2, 3, 4, 5])
+            peerCommunicator.sendData(testData)
+        }
     }
 }
 
@@ -188,5 +206,5 @@ fileprivate struct LogEntryRow: View {
 }
 
 #Preview {
-    BasicPeerCommunicationView(peerCommunicator: MockPeerCommunicator())
+    BasicPeerCommunicationView(peerCommunicator: MockPeerCommunicator(), commState: PeerCommunicatorState())
 }
