@@ -6,5 +6,10 @@
 	<array>
 		<string>_dwb-mpbench._tcp</string>
 	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-peripheral</string>
+		<string>bluetooth-central</string>
+	</array>
 </dict>
 </plist>

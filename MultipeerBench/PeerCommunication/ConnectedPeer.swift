@@ -11,8 +11,9 @@ import MultipeerConnectivity
 @Observable
 final class ConnectedPeer: Identifiable {
     let id: UUID
-    var isSelected: Bool = true
+    var isSelected: Bool = false
     let mcPeerID: MCPeerID
+    var isConnected: Bool = false
     
     var displayName: String {
         mcPeerID.displayName

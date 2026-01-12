@@ -29,9 +29,9 @@ struct AdvancedPeerCommunicationView: View {
                 return commState.isBrowsing && commState.isAdvertising
             }, set: { startComms in
                 if startComms {
-                    peerCommunicator.start()
+                    peerCommunicator.startBroadcasting()
                 } else {
-                    peerCommunicator.stop()
+                    peerCommunicator.stopBroadcasting()
                 }
             })
     }
@@ -158,23 +158,30 @@ fileprivate struct ConnectedPeerRow: View {
     @Environment(\.colorScheme) var colorScheme
     
     var body: some View {
-        Button {
-            peer.isSelected.toggle()
-        } label: {
-            HStack {
-                VStack(alignment: .leading) {
-                    Text(peer.displayName)
+        ZStack {
+            ProgressView()
+                .opacity(peer.isConnected ? 0 : 1)
+            
+            Button {
+                peer.isSelected.toggle()
+            } label: {
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text(peer.displayName)
+                        
+                        Text("\(peer.mcPeerID.hash)")
+                            .font(.footnote)
+                    }
+                    .foregroundStyle(colorScheme.isLight ? .black : .white)
                     
-                    Text("\(peer.mcPeerID.hash)")
-                        .font(.footnote)
+                    Spacer()
+                    Image(systemName: peer.isSelected ? "antenna.radiowaves.left.and.right.circle" : "antenna.radiowaves.left.and.right.slash.circle")
+                        .font(.title)
+                        .foregroundStyle(peer.isSelected ? .blue : .gray)
                 }
-                .foregroundStyle(colorScheme.isLight ? .black : .white)
-                
-                Spacer()
-                Image(systemName: peer.isSelected ? "antenna.radiowaves.left.and.right.circle" : "antenna.radiowaves.left.and.right.slash.circle")
-                    .font(.title)
-                    .foregroundStyle(peer.isSelected ? .blue : .gray)
             }
+            .opacity(peer.isConnected ? 1 : 0.2)
+            .disabled(!peer.isConnected)
         }
     }
 }
