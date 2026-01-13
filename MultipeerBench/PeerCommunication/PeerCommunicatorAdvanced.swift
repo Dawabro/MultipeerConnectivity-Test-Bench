@@ -48,8 +48,8 @@ final class PeerCommunicatorAdvancedState {
             peer.isSelected = false
             peer.isConnected = false
         } else {
-            let newConnectedPeer = NearbyPeer(peerID: peerID)
-            peers.append(newConnectedPeer)
+            let newConnectingPeer = NearbyPeer(peerID: peerID)
+            peers.append(newConnectingPeer)
         }
     }
     
@@ -85,7 +85,7 @@ final class PeerCommunicatorAdvanced: NSObject, PeerCommunicationAdvanced {
     private var peerFoundTimestamp = [MCPeerID: Date]()
     private var foundPeers: Set<MCPeerID> = []
     private var reconnectionCount: [MCPeerID: Int] = [:]
-    private var backupInviteTasks: [MCPeerID: Task<Void, Never>] = [:]
+    private var scheduledInviteTasks: [MCPeerID: Task<Void, Never>] = [:]
     
     private let browserEventStream: AsyncStream<BrowserEvent>
     private nonisolated let browserEventContinuation: AsyncStream<BrowserEvent>.Continuation
@@ -165,6 +165,8 @@ final class PeerCommunicatorAdvanced: NSObject, PeerCommunicationAdvanced {
     }
     
     deinit {
+        scheduledInviteTasks.values.forEach { $0.cancel() }
+        scheduledInviteTasks.removeAll()
         browserEventContinuation.finish()
         advertiserEventContinuation.finish()
         sessionStateContinuation.finish()
@@ -182,7 +184,7 @@ final class PeerCommunicatorAdvanced: NSObject, PeerCommunicationAdvanced {
     }
     
     private func startBrowsing() {
-        assert(state.isBrowsing == false, "Calling startBrowsingForPeers() again is not supported, will cause crashes.")
+        assert(state.isBrowsing == false, "Repeated or rapid startBrowsingForPeers() calls can cause crashes")
         guard state.isBrowsing == false else { return }
         serviceBrowser.startBrowsingForPeers()
         state.log(message: "🟢 Browsing started")
@@ -190,6 +192,7 @@ final class PeerCommunicatorAdvanced: NSObject, PeerCommunicationAdvanced {
     }
     
     private func stopBrowsing() {
+        assert(state.isBrowsing, "Repeated or rapid stopBrowsingForPeers() calls can cause crashes")
         guard state.isBrowsing else { return }
         serviceBrowser.stopBrowsingForPeers()
         state.log(message: "🔴 Browsing stopped")
@@ -197,7 +200,7 @@ final class PeerCommunicatorAdvanced: NSObject, PeerCommunicationAdvanced {
     }
     
     private func startAdvertising() {
-        assert(state.isAdvertising == false, "Calling startAdvertisingPeer() again is not supported, will cause crashes.")
+        assert(state.isAdvertising == false, "Repeated or rapid startAdvertisingPeer() calls can cause crashes")
         guard state.isAdvertising == false else { return }
         serviceAdvertiser.startAdvertisingPeer()
         state.log(message: "🟢 Advertising started")
@@ -205,6 +208,7 @@ final class PeerCommunicatorAdvanced: NSObject, PeerCommunicationAdvanced {
     }
     
     private func stopAdvertising() {
+        assert(state.isAdvertising, "Repeated or rapid stopAdvertisingPeer() calls can cause crashes")
         guard state.isAdvertising else { return }
         serviceAdvertiser.stopAdvertisingPeer()
         state.log(message: "🔴 Advertising stopped")
@@ -256,7 +260,7 @@ extension PeerCommunicatorAdvanced: MCNearbyServiceAdvertiserDelegate {
         switch event {
         case .receivedInvitation(let peerID, _, let invitation):
             state.log(message: "📬 Received invitation from: \(peerID.displayName)")
-            backupInviteTasks[peerID]?.cancel()
+            scheduledInviteTasks[peerID]?.cancel()
             
             if peerFoundTimestamp[peerID] == nil {
                 peerFoundTimestamp[peerID] = Date()
@@ -297,9 +301,14 @@ extension PeerCommunicatorAdvanced: MCNearbyServiceBrowserDelegate {
                 peerFoundTimestamp[peerID] = Date()
             }
             
-            guard shouldInvite(peerID), state.peers.contains(where: { $0.mcPeerID == peerID }) == false else { return }
-            serviceBrowser.invitePeer(peerID, to: session, withContext: nil, timeout: 10)
-            state.log(message: "✉️ Invited \(peerID.displayName) to join session")
+            guard state.peers.contains(where: { $0.mcPeerID == peerID }) == false else { return }
+            
+            if shouldInvite(peerID) {
+                serviceBrowser.invitePeer(peerID, to: session, withContext: nil, timeout: 8)
+                state.log(message: "✉️ Invited \(peerID.displayName) to join session")
+            } else {
+                scheduleInvite(peerID)
+            }
             
         case .lostPeer(let peerID):
             foundPeers.remove(peerID)
@@ -363,23 +372,23 @@ extension PeerCommunicatorAdvanced: MCSessionDelegate {
         if shouldInvite(peerID) {
             serviceBrowser.invitePeer(peerID, to: session, withContext: nil, timeout: 5)
         } else {
-            scheduleBackupInvite(peerID)
+            scheduleInvite(peerID)
         }
         
         self.state.log(message: "🔄 Attempt \(attempt) to reconnect to \(peerID.displayName)...")
     }
     
-    private func scheduleBackupInvite(_ peerID: MCPeerID) {
-        backupInviteTasks[peerID]?.cancel()
+    private func scheduleInvite(_ peerID: MCPeerID) {
+        scheduledInviteTasks[peerID]?.cancel()
         
-        backupInviteTasks[peerID] = Task { @MainActor in
-            defer { self.backupInviteTasks[peerID] = nil }
+        scheduledInviteTasks[peerID] = Task { @MainActor in
+            defer { self.scheduledInviteTasks[peerID] = nil }
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled else { return }
             guard foundPeers.contains(peerID), session.connectedPeers.doesNotContain(peerID) else { return }
             
             serviceBrowser.invitePeer(peerID, to: session, withContext: nil, timeout: 5)
-            state.log(message: "✉️ Backup invite sent to \(peerID.displayName) to rejoin session")
+            state.log(message: "✉️ Scheduled invite sent to \(peerID.displayName) to rejoin session")
         }
     }
     
