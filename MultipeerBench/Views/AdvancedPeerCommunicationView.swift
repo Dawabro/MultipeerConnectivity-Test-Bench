@@ -9,13 +9,13 @@ import SwiftUI
 
 struct AdvancedPeerCommunicationView: View {
     var peerCommunicator: PeerCommunicationAdvanced
-    var commState: PeerCommunicatorAdvancedState
+    @Bindable var commState: PeerCommunicatorAdvancedState
     @State private var showClearLogsAlert = false
     @State private var showSessionDisconnectAlert = false
     @State private var highlightedLogIDs: Set<UUID> = []
     
     private var dataSendingDisabled: Bool {
-        commState.connectedPeers.isEmpty ||  commState.connectedPeers.allSatisfy { $0.isSelected == false }
+        commState.peers.allSatisfy { $0.isConnected == false } ||  commState.peers.allSatisfy { $0.isSelected == false }
     }
     
     init(peerCommunicator: PeerCommunicationAdvanced, commState: PeerCommunicatorAdvancedState) {
@@ -55,7 +55,7 @@ struct AdvancedPeerCommunicationView: View {
             
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("Connected Peers:")
+                    Text("Nearby Peers:")
                         .font(.footnote)
                         .fontWeight(.medium)
                         .underline()
@@ -70,9 +70,9 @@ struct AdvancedPeerCommunicationView: View {
                     }
                 }
                 
-                List(commState.connectedPeers) { peer in
+                List(commState.peers) { peer in
                     VStack(alignment: .leading, spacing: 4) {
-                        ConnectedPeerRow(peer: peer)
+                        NearbyPeerRow(peer: peer)
                     }
                 }
                 .listStyle(.plain)
@@ -153,8 +153,8 @@ struct AdvancedPeerCommunicationView: View {
     }
 }
 
-fileprivate struct ConnectedPeerRow: View {
-    var peer: ConnectedPeer
+fileprivate struct NearbyPeerRow: View {
+    @Bindable var peer: NearbyPeer
     @Environment(\.colorScheme) var colorScheme
     
     var body: some View {

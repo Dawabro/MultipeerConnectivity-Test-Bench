@@ -37,14 +37,14 @@ protocol PeerCommunication {
     func startAdvertising()
     func stopAdvertising()
     func sendData(_ data: Data)
-    func disconnectPeer(_ peer: ConnectedPeer)
+    func disconnectPeer(_ peer: NearbyPeer)
     func disconnectSession()
 }
 
 @Observable
 @MainActor
 final class PeerCommunicatorState {
-    private(set) var connectedPeers: [ConnectedPeer] = []
+    private(set) var connectedPeers: [NearbyPeer] = []
     private(set) var logs: [LogEntry] = []
     private(set) var isBrowsing: Bool = false
     private(set) var isAdvertising: Bool = false
@@ -69,7 +69,7 @@ final class PeerCommunicatorState {
     }
     
     func addConnectedPeer(_ peerID: MCPeerID) {
-        let newConnectedPeer = ConnectedPeer(peerID: peerID)
+        let newConnectedPeer = NearbyPeer(peerID: peerID)
         connectedPeers.append(newConnectedPeer)
     }
     
@@ -195,7 +195,7 @@ final class PeerCommunicatorBasic: NSObject, PeerCommunication {
         }
     }
     
-    func disconnectPeer(_ peer: ConnectedPeer) {
+    func disconnectPeer(_ peer: NearbyPeer) {
         session.cancelConnectPeer(peer.mcPeerID)
         state.log(message: "🔴 Canceled connection with \(peer.mcPeerID.displayName)")
     }
@@ -362,7 +362,7 @@ final class MockPeerCommunicator: PeerCommunication {
         print("sent data: \(data.count) bytes")
     }
     
-    func disconnectPeer(_ peer: ConnectedPeer) {
+    func disconnectPeer(_ peer: NearbyPeer) {
         state.removeConnectedPeer(peer.mcPeerID)
     }
     

@@ -7,7 +7,6 @@
 
 import Foundation
 @preconcurrency import MultipeerConnectivity
-import Network
 
 @MainActor
 protocol PeerCommunicationAdvanced {
@@ -16,18 +15,16 @@ protocol PeerCommunicationAdvanced {
     func startBroadcasting()
     func stopBroadcasting()
     func sendData(_ data: Data)
-    func disconnectSession()
+    func disconnectSession() // for testing only, will remove in production
 }
 
 @Observable
 @MainActor
 final class PeerCommunicatorAdvancedState {
-    private(set) var connectedPeers: [ConnectedPeer] = []
+    private(set) var peers: [NearbyPeer] = []
     private(set) var logs: [LogEntry] = []
     private(set) var isBrowsing: Bool = false
     private(set) var isAdvertising: Bool = false
-    
-    nonisolated init() { }
     
     func setIsBrowsing(_ isBrowsing: Bool) {
         self.isBrowsing = isBrowsing
@@ -46,20 +43,25 @@ final class PeerCommunicatorAdvancedState {
         logs.removeAll()
     }
     
-    func addPeer(_ peerID: MCPeerID) {
-        let newConnectedPeer = ConnectedPeer(peerID: peerID)
-        connectedPeers.append(newConnectedPeer)
+    func addConnectingPeer(_ peerID: MCPeerID) {
+        if let peer = peers.first(where: { $0.mcPeerID == peerID }) {
+            peer.isSelected = false
+            peer.isConnected = false
+        } else {
+            let newConnectedPeer = NearbyPeer(peerID: peerID)
+            peers.append(newConnectedPeer)
+        }
     }
     
     func setPeerAsConnected(_ peerID: MCPeerID) {
-        guard let connectedPeer = connectedPeers.first(where: { $0.mcPeerID == peerID }) else { return }
+        guard let connectedPeer = peers.first(where: { $0.mcPeerID == peerID }) else { return }
         connectedPeer.isConnected = true
         connectedPeer.isSelected = true
     }
     
     func removeConnectedPeer(_ peerID: MCPeerID) {
-        if connectedPeers.contains(where: { $0.mcPeerID == peerID }) {
-            connectedPeers.removeAll { $0.mcPeerID == peerID }
+        if peers.contains(where: { $0.mcPeerID == peerID }) {
+            peers.removeAll { $0.mcPeerID == peerID }
             log(message: "⚠️ removed \(peerID.displayName) from connectedPeers")
         } else {
             log(message: "⚠️ attempted to remove peer that wasn't connected")
@@ -67,19 +69,23 @@ final class PeerCommunicatorAdvancedState {
     }
     
     func removeAllConnectedPeers() {
-        connectedPeers.removeAll(keepingCapacity: true)
+        peers.removeAll(keepingCapacity: true)
     }
 }
 
 @MainActor
 final class PeerCommunicatorAdvanced: NSObject, PeerCommunicationAdvanced {
     let state = PeerCommunicatorAdvancedState()
-    private nonisolated let peerID: MCPeerID
+    private let myPeerID: MCPeerID
     private let session: MCSession
-    private var serviceBrowser: MCNearbyServiceBrowser
-    private var serviceAdvertiser: MCNearbyServiceAdvertiser
+    private let serviceBrowser: MCNearbyServiceBrowser
+    private let serviceAdvertiser: MCNearbyServiceAdvertiser
     private let serviceType = "dwb-mpbench"
+    
     private var peerFoundTimestamp = [MCPeerID: Date]()
+    private var foundPeers: Set<MCPeerID> = []
+    private var reconnectionCount: [MCPeerID: Int] = [:]
+    private var backupInviteTasks: [MCPeerID: Task<Void, Never>] = [:]
     
     private let browserEventStream: AsyncStream<BrowserEvent>
     private nonisolated let browserEventContinuation: AsyncStream<BrowserEvent>.Continuation
@@ -92,9 +98,6 @@ final class PeerCommunicatorAdvanced: NSObject, PeerCommunicationAdvanced {
     
     private let receivedDataStream: AsyncStream<(Data, MCPeerID)>
     private nonisolated let receivedDataContinuation: AsyncStream<(Data, MCPeerID)>.Continuation
-    
-    private var restartTask: Task<Void, Error>?
-    private var reconnectTask: Task<Void, Error>?
         
     init(displayNameInput: String? = nil) {
         var myPeerDisplayName: String
@@ -106,7 +109,7 @@ final class PeerCommunicatorAdvanced: NSObject, PeerCommunicationAdvanced {
         }
         
         let peerID = MCPeerID(displayName: myPeerDisplayName)
-        self.peerID = peerID
+        self.myPeerID = peerID
         self.session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
         self.serviceBrowser = MCNearbyServiceBrowser(peer: peerID, serviceType: serviceType)
         self.serviceAdvertiser = MCNearbyServiceAdvertiser(peer: peerID, discoveryInfo: nil, serviceType: serviceType)
@@ -142,7 +145,7 @@ final class PeerCommunicatorAdvanced: NSObject, PeerCommunicationAdvanced {
             
             for await (peerID, state) in stream {
                 guard let self else { return }
-                self.handleSessionStateChange(peerID: peerID, state: state)
+                await self.handleSessionStateChange(peerID: peerID, state: state)
             }
         }
         
@@ -159,35 +162,6 @@ final class PeerCommunicatorAdvanced: NSObject, PeerCommunicationAdvanced {
         self.session.delegate = self
         self.serviceBrowser.delegate = self
         self.serviceAdvertiser.delegate = self
-        
-        NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { _ in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.state.log(message: "⚠️ App will go to background)")
-                
-                self.reconnectTask?.cancel()
-                self.restartTask?.cancel()
-                
-                self.stopBroadcasting()
-            }
-        }
-        
-        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.state.log(message: "🟢 App did become active)")
-                
-                self.restartTask?.cancel()
-                
-                self.restartTask = Task { @MainActor [weak self] in
-                    try await Task.sleep(for: .seconds(2))
-                    guard let self, !Task.isCancelled else { return }
-                    
-                    self.state.log(message: "🔄 Restarting browsing and advertising")
-                    try await self.recreateBrowserAndAdvertiser()
-                }
-            }
-        }
     }
     
     deinit {
@@ -216,6 +190,7 @@ final class PeerCommunicatorAdvanced: NSObject, PeerCommunicationAdvanced {
     }
     
     private func stopBrowsing() {
+        guard state.isBrowsing else { return }
         serviceBrowser.stopBrowsingForPeers()
         state.log(message: "🔴 Browsing stopped")
         state.setIsBrowsing(false)
@@ -230,13 +205,14 @@ final class PeerCommunicatorAdvanced: NSObject, PeerCommunicationAdvanced {
     }
     
     private func stopAdvertising() {
+        guard state.isAdvertising else { return }
         serviceAdvertiser.stopAdvertisingPeer()
         state.log(message: "🔴 Advertising stopped")
         state.setIsAdvertising(false)
     }
     
     func sendData(_ data: Data) {
-        let selectedPeers = state.connectedPeers.filter { $0.isSelected }.map { $0.mcPeerID }
+        let selectedPeers = state.peers.filter { $0.isSelected }.map { $0.mcPeerID }
         
         do {
             try session.send(data, toPeers: selectedPeers, with: .reliable)
@@ -280,6 +256,7 @@ extension PeerCommunicatorAdvanced: MCNearbyServiceAdvertiserDelegate {
         switch event {
         case .receivedInvitation(let peerID, _, let invitation):
             state.log(message: "📬 Received invitation from: \(peerID.displayName)")
+            backupInviteTasks[peerID]?.cancel()
             
             if peerFoundTimestamp[peerID] == nil {
                 peerFoundTimestamp[peerID] = Date()
@@ -313,23 +290,30 @@ extension PeerCommunicatorAdvanced: MCNearbyServiceBrowserDelegate {
     private func handleBrowserEvent(_ event: BrowserEvent) {
         switch event {
         case .foundPeer(let peerID, let discoveryInfo):
+            foundPeers.insert(peerID)
             state.log(message: "👋 Found \(peerID.displayName)")
             
             if peerFoundTimestamp[peerID] == nil {
                 peerFoundTimestamp[peerID] = Date()
             }
             
-            guard session.connectedPeers.doesNotContain(peerID) else { return }
-            serviceBrowser.invitePeer(peerID, to: session, withContext: nil, timeout: 45)
+            guard shouldInvite(peerID), state.peers.contains(where: { $0.mcPeerID == peerID }) == false else { return }
+            serviceBrowser.invitePeer(peerID, to: session, withContext: nil, timeout: 10)
             state.log(message: "✉️ Invited \(peerID.displayName) to join session")
             
         case .lostPeer(let peerID):
+            foundPeers.remove(peerID)
             state.log(message: "⚠️ Lost \(peerID.displayName)")
             
         case .failed(let error):
             state.setIsBrowsing(false)
             state.log(message: "⛔️ Did not start browsing for peers, error: \(error.localizedDescription)")
         }
+    }
+    
+    private func shouldInvite(_ peerID: MCPeerID) -> Bool {
+        // Deterministic tie-breaker to avoid double-invite
+        myPeerID.hash < peerID.hash
     }
 }
 
@@ -340,10 +324,10 @@ extension PeerCommunicatorAdvanced: MCSessionDelegate {
         sessionStateContinuation.yield((peerID, state))
     }
     
-    private func handleSessionStateChange(peerID: MCPeerID, state: MCSessionState) {
+    private func handleSessionStateChange(peerID: MCPeerID, state: MCSessionState) async {
         switch state {
         case MCSessionState.connecting:
-            self.state.addPeer(peerID)
+            self.state.addConnectingPeer(peerID)
             self.state.log(message: "📡 Connecting to \(peerID.displayName)")
             
         case MCSessionState.connected:
@@ -351,15 +335,16 @@ extension PeerCommunicatorAdvanced: MCSessionDelegate {
             let connectionTimeInterval = Date().timeIntervalSince(peerFoundTime).formatted(.number.precision(.fractionLength(2)))
             self.state.log(message: "📳 Connected to \(peerID.displayName) in \(connectionTimeInterval) seconds")
             self.state.setPeerAsConnected(peerID)
+            self.reconnectionCount.removeValue(forKey: peerID)
             
         case MCSessionState.notConnected:
-            let isAConnectedPeer = self.state.connectedPeers.contains(where: { $0.mcPeerID == peerID })
+            let isAConnectedPeer = self.state.peers.contains(where: { $0.mcPeerID == peerID })
             
             if isAConnectedPeer {
                 self.state.log(message: "📵 Not connected to \(peerID.displayName) \(peerID.hash)")
                 self.state.removeConnectedPeer(peerID)
                 self.peerFoundTimestamp.removeValue(forKey: peerID)
-                self.scheduleBrowsingAdvertisingRestart()
+                await self.attemptReconnect(to: peerID)
             } else {
                 peerFoundTimestamp.removeValue(forKey: peerID)
                 self.state.log(message: "📵 Not connected to \(peerID.displayName) \(peerID.hash) (Ignored, not a connected peer)")
@@ -370,41 +355,32 @@ extension PeerCommunicatorAdvanced: MCSessionDelegate {
         }
     }
     
-    private func scheduleBrowsingAdvertisingRestart() {
-        guard UIApplication.shared.applicationState == .active else {
-            state.log(message: "⏸️ Skipping restart, app not active")
-            return
+    private func attemptReconnect(to peerID: MCPeerID) async {
+        guard foundPeers.contains(peerID) else { return }
+        reconnectionCount[peerID, default: 0] += 1
+        let attempt = reconnectionCount[peerID, default: 0]
+        
+        if shouldInvite(peerID) {
+            serviceBrowser.invitePeer(peerID, to: session, withContext: nil, timeout: 5)
+        } else {
+            scheduleBackupInvite(peerID)
         }
         
-        reconnectTask?.cancel()
-        
-        reconnectTask = Task { @MainActor [weak self] in
-            try await Task.sleep(for: .seconds(2))
-            guard let self, !Task.isCancelled else { return }
-            
-            self.state.log(message: "🔄 Recreating browser and advertiser")
-            try await self.recreateBrowserAndAdvertiser()
-        }
+        self.state.log(message: "🔄 Attempt \(attempt) to reconnect to \(peerID.displayName)...")
     }
     
-    private func recreateBrowserAndAdvertiser() async throws {
-        // Stop and detach old instances
-        stopBroadcasting()
-        serviceBrowser.delegate = nil
-        serviceAdvertiser.delegate = nil
+    private func scheduleBackupInvite(_ peerID: MCPeerID) {
+        backupInviteTasks[peerID]?.cancel()
         
-        // Create fresh instances
-        serviceBrowser = MCNearbyServiceBrowser(peer: peerID, serviceType: serviceType)
-        serviceAdvertiser = MCNearbyServiceAdvertiser(peer: peerID, discoveryInfo: nil, serviceType: serviceType)
-        
-        // Reconnect delegates
-        serviceBrowser.delegate = self
-        serviceAdvertiser.delegate = self
-        
-        // Start fresh
-        startBrowsing()
-        try await Task.sleep(for: .seconds(1))
-        startAdvertising()
+        backupInviteTasks[peerID] = Task { @MainActor in
+            defer { self.backupInviteTasks[peerID] = nil }
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            guard foundPeers.contains(peerID), session.connectedPeers.doesNotContain(peerID) else { return }
+            
+            serviceBrowser.invitePeer(peerID, to: session, withContext: nil, timeout: 5)
+            state.log(message: "✉️ Backup invite sent to \(peerID.displayName) to rejoin session")
+        }
     }
     
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
@@ -454,9 +430,9 @@ final class MockPeerCommunicatorAdvanced: PeerCommunicationAdvanced {
     
     init(withConnectedPeers: Bool = true) {
         if withConnectedPeers {
-            state.addPeer(MCPeerID(displayName: "Ashley iPhone"))
-            state.addPeer(MCPeerID(displayName: "Pierson iPad"))
-            state.addPeer(MCPeerID(displayName: "Liam Mac"))
+            state.addConnectingPeer(MCPeerID(displayName: "Ashley iPhone"))
+            state.addConnectingPeer(MCPeerID(displayName: "Pierson iPad"))
+            state.addConnectingPeer(MCPeerID(displayName: "Liam Mac"))
         }
     }
     

@@ -170,7 +170,7 @@ struct BasicPeerCommunicationView: View {
 }
 
 fileprivate struct ConnectedPeerRow: View {
-    var peer: ConnectedPeer
+    var peer: NearbyPeer
     @Environment(\.colorScheme) var colorScheme
     
     var body: some View {

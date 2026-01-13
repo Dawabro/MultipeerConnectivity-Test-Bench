@@ -1,5 +1,5 @@
 //
-//  ConnectedPeer.swift
+//  NearbyPeer.swift
 //  MultipeerBench
 //
 //  Created by David Brown on 12/5/25.
@@ -9,10 +9,10 @@ import Foundation
 import MultipeerConnectivity
 
 @Observable
-final class ConnectedPeer: Identifiable {
+final class NearbyPeer: Identifiable, Equatable {
     let id: UUID
-    var isSelected: Bool = false
     let mcPeerID: MCPeerID
+    var isSelected: Bool = false
     var isConnected: Bool = false
     
     var displayName: String {
@@ -20,7 +20,11 @@ final class ConnectedPeer: Identifiable {
     }
     
     init(peerID: MCPeerID) {
-        self.id = UUID()
         self.mcPeerID = peerID
+        self.id = UUID()
+    }
+    
+    static func == (lhs: NearbyPeer, rhs: NearbyPeer) -> Bool {
+        lhs.mcPeerID == rhs.mcPeerID
     }
 }
